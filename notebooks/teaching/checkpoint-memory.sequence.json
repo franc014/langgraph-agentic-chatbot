@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Checkpoint Memory — Before vs After Sequence",
+    "viewBox": [920, 940],
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "turn1",
+        "label": "Turn 1 — Teach",
+        "focus": ["user", "loop", "graph", "llm", "mem"],
+        "note": "Both paths teach the same fact: H1 = My name is Theo."
+      },
+      {
+        "id": "before",
+        "label": "Turn 2 — WITHOUT",
+        "focus": ["user", "loop", "graph", "llm"],
+        "note": "Stateless: LLM sees only [H2] and forgets."
+      },
+      {
+        "id": "after",
+        "label": "Turn 2 — WITH Memory",
+        "focus": ["user", "loop", "graph", "llm", "mem"],
+        "note": "Stateful: checkpoint loads [H1,AI1] + H2 and remembers."
+      }
+    ]
+  },
+  "participants": [
+    { "id": "user", "type": "external", "label": "User", "sublabel": "HumanMessage" },
+    { "id": "loop", "type": "frontend", "label": "Python Loop", "sublabel": "while True" },
+    { "id": "graph", "type": "backend", "label": "StateGraph", "sublabel": "ChatState" },
+    { "id": "llm", "type": "cloud", "label": "LLM", "sublabel": "Groq / OpenAI" },
+    { "id": "mem", "type": "database", "label": "MemorySaver", "sublabel": "thread_id=1" }
+  ],
+  "segments": [
+    { "from": 150, "to": 375, "label": "Turn 1 — Teach (shared)" },
+    { "from": 390, "to": 570, "label": "Turn 2 — WITHOUT checkpoint ❌" },
+    { "from": 580, "to": 840, "label": "Turn 2 — WITH checkpoint ✓" }
+  ],
+  "messages": [
+    { "from": "user", "to": "loop", "y": 185, "label": "H1: My name is Theo", "variant": "emphasis" },
+    { "from": "loop", "to": "graph", "y": 215, "label": "invoke({messages:[H1]})", "variant": "default" },
+    { "from": "graph", "to": "llm", "y": 245, "label": "llm.invoke([H1])", "variant": "default" },
+    { "from": "llm", "to": "graph", "y": 275, "label": "AI1: Hi Theo!", "variant": "return" },
+    { "from": "graph", "to": "mem", "y": 305, "label": "save [H1, AI1] @ thread_1", "variant": "dashed" },
+    { "from": "graph", "to": "loop", "y": 335, "label": "return AI1", "variant": "return" },
+    { "from": "loop", "to": "user", "y": 365, "label": "AI: Hi Theo!", "variant": "return" },
+    { "from": "user", "to": "loop", "y": 410, "label": "H2: What's my name?", "variant": "security" },
+    { "from": "loop", "to": "graph", "y": 440, "label": "invoke({messages:[H2]})", "variant": "security", "note": "no thread_id" },
+    { "from": "graph", "to": "llm", "y": 470, "label": "llm.invoke([H2]) only", "variant": "security" },
+    { "from": "llm", "to": "graph", "y": 500, "label": "❓ unknown", "variant": "return" },
+    { "from": "graph", "to": "loop", "y": 530, "label": "return fail", "variant": "return" },
+    { "from": "loop", "to": "user", "y": 560, "label": "AI: I don't know you ❌", "variant": "security" },
+    { "from": "user", "to": "loop", "y": 595, "label": "H2: What's my name?", "variant": "emphasis" },
+    { "from": "loop", "to": "graph", "y": 625, "label": "invoke([H2], thread_1)", "variant": "emphasis", "note": "with thread_id" },
+    { "from": "graph", "to": "mem", "y": 655, "label": "load [H1, AI1]", "variant": "dashed" },
+    { "from": "mem", "to": "graph", "y": 685, "label": "[H1, AI1]", "variant": "return" },
+    { "from": "graph", "to": "llm", "y": 715, "label": "llm.invoke([H1,AI1,H2])", "variant": "emphasis" },
+    { "from": "llm", "to": "graph", "y": 745, "label": "You're Theo!", "variant": "return" },
+    { "from": "graph", "to": "mem", "y": 775, "label": "save [H1,AI1,H2,AI2]", "variant": "dashed" },
+    { "from": "graph", "to": "loop", "y": 805, "label": "return success", "variant": "return" },
+    { "from": "loop", "to": "user", "y": 835, "label": "AI: You're Theo! ✓", "variant": "emphasis" }
+  ],
+  "activations": [
+    { "participant": "loop", "from": 185, "to": 365, "type": "frontend" },
+    { "participant": "graph", "from": 215, "to": 335, "type": "backend" },
+    { "participant": "llm", "from": 245, "to": 275, "type": "cloud" },
+    { "participant": "mem", "from": 305, "to": 310, "type": "database" },
+    { "participant": "loop", "from": 410, "to": 560, "type": "frontend" },
+    { "participant": "graph", "from": 440, "to": 530, "type": "backend" },
+    { "participant": "llm", "from": 470, "to": 500, "type": "cloud" },
+    { "participant": "loop", "from": 595, "to": 835, "type": "frontend" },
+    { "participant": "graph", "from": 625, "to": 805, "type": "backend" },
+    { "participant": "llm", "from": 715, "to": 745, "type": "cloud" },
+    { "participant": "mem", "from": 655, "to": 685, "type": "database" }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "BEFORE — Stateless", "items": ["graph = StateGraph.compile() — no checkpointer", "Each invoke is isolated: [H2] only → LLM has no history", "Result: forgets Theo"] },
+    { "dot": "emerald", "title": "AFTER — Stateful", "items": ["graph.compile(checkpointer=MemorySaver()) + thread_id", "Turn 2 loads [H1,AI1] via add_messages, appends H2", "LLM sees [H1,AI1,H2] → remembers"] },
+    { "dot": "cyan", "title": "Key insight", "items": ["add_messages works inside one run", "Checkpointer persists across runs", "2 lines change single-turn into multi-turn"] }
+  ]
+}

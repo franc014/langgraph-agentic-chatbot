@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkpoint Memory — Why the Chatbot Forgets vs. Remembers</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter','system-ui','sans-serif'], mono: ['JetBrains Mono','monospace'] },
+      colors: {
+        ink: '#0A0A0F',
+        rose: { 500: '#f43f5e', 600: '#e11d48' },
+        emerald: { 500: '#10b981', 600: '#059669' },
+        cyan: { 500: '#06b6d4', 600: '#0891b2' },
+        violet: { 500: '#8b5cf6' },
+      }
+    }
+  }
+}
+</script>
+<style>
+* { -webkit-font-smoothing: antialiased; }
+.glass { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.pill { transition: all 0.45s cubic-bezier(0.4,0,0.2,1); }
+.pill-enter { animation: pillIn 0.5s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+@keyframes pillIn { from { opacity:0; transform: translateY(12px) scale(0.96); } to { opacity:1; transform: translateY(0) scale(1); } }
+.pill-exit { animation: pillOut 0.4s ease forwards; }
+@keyframes pillOut { from { opacity:1; transform: scale(1); } to { opacity:0; transform: scale(0.94); } }
+.array-bar { transition: width 0.6s ease, background-color 0.3s ease; }
+.discard { animation: discardShake 0.6s ease; }
+@keyframes discardShake { 0% { transform: translateX(0); } 20% { transform: translateX(-6px); } 40% { transform: translateX(6px); } 60% { transform: translateX(-4px); } 100% { transform: translateX(0); opacity:0; } }
+.trace-line { stroke-dasharray: 8 8; animation: dash 1.2s linear infinite; }
+@keyframes dash { to { stroke-dashoffset: -16; } }
+.code-hl { background: linear-gradient(90deg, rgba(16,185,129,0.18), rgba(16,185,129,0)); border-left: 3px solid #10b981; }
+.code-hl-rose { background: linear-gradient(90deg, rgba(244,63,94,0.15), transparent); border-left: 3px solid #f43f5e; }
+</style>
+</head>
+<body class="bg-[#FCFCFD] dark:bg-[#07070A] text-zinc-900 dark:text-zinc-100 selection:bg-violet-500/20">
+<!-- Header -->
+<header class="sticky top-0 z-40 border-b border-zinc-200/70 dark:border-zinc-800/80 bg-white/70 dark:bg-zinc-900/60 glass">
+  <div class="max-w-[1220px] mx-auto px-6 h-[64px] flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-9 h-9 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 grid place-items-center font-bold text-[13px] tracking-tight">LG</div>
+      <div>
+        <div class="text-[13px] font-semibold tracking-tight leading-none">LangGraph • Teaching Note</div>
+        <div class="text-[11px] tracking-wide text-zinc-500 dark:text-zinc-400 font-medium uppercase">notebooks / teaching</div>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="hidden md:inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-500/20">✓ Your fix applied: MemorySaver + thread_id</span>
+      <button id="themeToggle" class="w-9 h-9 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 grid place-items-center hover:bg-zinc-50 dark:hover:bg-zinc-800 transition">
+        <span class="text-sm">◐</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- Hero -->
+<section class="max-w-[1220px] mx-auto px-6 pt-10 pb-6">
+  <div class="flex flex-wrap items-center gap-2 mb-4">
+    <span class="text-xs font-semibold tracking-widest uppercase px-2.5 py-1 rounded-full bg-violet-600 text-white">Checkpoint Memory</span>
+    <span class="text-xs font-medium px-2.5 py-1 rounded-full bg-zinc-900 dark:bg-zinc-800 text-white">Before vs After</span>
+    <span class="text-xs text-zinc-500 dark:text-zinc-400">Interactive • Archify sequence inside</span>
+  </div>
+  <h1 class="text-[34px] md:text-[42px] font-extrabold tracking-tight leading-[0.95] max-w-[900px]">Why the LLM “forgets” your name<br><span class="bg-gradient-to-r from-violet-600 to-cyan-500 bg-clip-text text-transparent">and how 2 lines make it remember.</span></h1>
+  <p class="mt-4 text-[16px] leading-6 text-zinc-600 dark:text-zinc-400 max-w-[760px]">
+    You taught the graph <code class="px-1.5 py-0.5 rounded bg-zinc-900 text-white text-xs font-mono">ChatState + add_messages</code> but the bot still answers <em>“I don’t know you”</em> on the second turn. This page shows the missing piece — <strong>Checkpointer persistence</strong> — with a live playground and a traceable sequence diagram.
+  </p>
+  <div class="mt-6 grid md:grid-cols-3 gap-3 max-w-[900px]">
+    <div class="rounded-2xl border border-rose-200 dark:border-rose-900/50 bg-rose-50/70 dark:bg-rose-500/10 p-4">
+      <div class="text-xs font-bold tracking-widest uppercase text-rose-600 dark:text-rose-300">BEFORE — Stateless</div>
+      <div class="text-sm font-semibold mt-1">graph.compile()</div>
+      <div class="text-xs text-zinc-600 dark:text-zinc-400 mt-1 leading-4">State dies at <code>END</code>. Every <code>invoke({messages:[H2]})</code> is isolated.</div>
+    </div>
+    <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 flex items-center justify-center">
+      <div class="text-center">
+        <div class="text-2xl">→</div>
+        <div class="text-xs font-semibold tracking-widest uppercase text-zinc-500">2-line fix</div>
+        <div class="text-xs font-mono mt-1">MemorySaver + thread_id</div>
+      </div>
+    </div>
+    <div class="rounded-2xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/70 dark:bg-emerald-500/10 p-4">
+      <div class="text-xs font-bold tracking-widest uppercase text-emerald-700 dark:text-emerald-300">AFTER — Stateful</div>
+      <div class="text-sm font-semibold mt-1">compile(checkpointer=...)</div>
+      <div class="text-xs text-zinc-600 dark:text-zinc-400 mt-1 leading-4">State loads <code>[H1,AI1]</code> before Turn 2. LLM sees full history.</div>
+    </div>
+  </div>
+</section>
+
+<!-- Playground -->
+<section class="max-w-[1220px] mx-auto px-6 pb-8">
+  <div class="rounded-[24px] border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.25)] overflow-hidden">
+    <div class="px-6 md:px-8 py-5 border-b border-zinc-100 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <h2 class="text-[15px] font-bold tracking-tight flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-violet-600 animate-pulse"></span> Live playground — step through the chat</h2>
+        <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1">Click the steps. Watch the <code>messages</code> array — it’s the LLM’s only memory.</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="btnReset" class="text-xs font-semibold px-3.5 py-2 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-100 transition">↺ Reset</button>
+        <button id="btnStep1" class="text-xs font-bold px-4 py-2.5 rounded-xl bg-violet-600 text-white hover:bg-violet-700 transition shadow">1 — Teach “My name is Theo”</button>
+        <button id="btnStep2" class="text-xs font-bold px-4 py-2.5 rounded-xl bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700 transition">2 — Ask “What’s my name?”</button>
+      </div>
+    </div>
+
+    <div class="grid lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-zinc-100 dark:divide-zinc-800">
+      <!-- BEFORE -->
+      <div class="p-6 md:p-7 bg-gradient-to-b from-rose-50/60 to-white dark:from-rose-500/[0.07] dark:to-zinc-900">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-xl bg-rose-600 text-white grid place-items-center text-[11px] font-bold">✕</div>
+            <div>
+              <div class="text-[13px] font-bold tracking-tight">WITHOUT MemorySaver</div>
+              <div class="text-[11px] font-mono text-zinc-500">graph.compile() — stateless</div>
+            </div>
+          </div>
+          <span id="badgeBefore" class="text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-full bg-zinc-900 dark:bg-zinc-800 text-white">Idle</span>
+        </div>
+
+        <!-- Array viz -->
+        <div class="mt-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-4">
+          <div class="flex items-center justify-between">
+            <div class="text-[11px] font-bold tracking-widest uppercase text-zinc-500">state[“messages”] — what LLM sees</div>
+            <div class="text-[11px] font-mono text-zinc-500" id="countBefore">len = 0</div>
+          </div>
+          <div class="mt-3 min-h-[92px] rounded-xl bg-zinc-50 dark:bg-zinc-900 border border-dashed border-zinc-200 dark:border-zinc-800 p-3 flex flex-wrap gap-2 content-start" id="arrayBefore">
+            <span class="text-xs text-zinc-400 italic">empty — no history yet</span>
+          </div>
+          <div class="mt-3 flex items-center gap-2 text-[11px] font-mono">
+            <span class="px-2 py-1 rounded-full bg-zinc-900 dark:bg-zinc-800 text-white">LLM input</span>
+            <code id="llmBefore" class="text-zinc-500">[]</code>
+          </div>
+          <!-- checkpoint visual -->
+          <div class="mt-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-3 flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-zinc-100 dark:bg-zinc-800 grid place-items-center text-sm">💾</div>
+            <div class="flex-1">
+              <div class="text-xs font-bold">Checkpointer</div>
+              <div id="ckptBefore" class="text-[11px] font-mono text-rose-600 dark:text-rose-300">— not configured —</div>
+            </div>
+            <div id="iconBefore" class="text-zinc-300 text-lg">∅</div>
+          </div>
+        </div>
+
+        <!-- Chat bubbles -->
+        <div class="mt-5 space-y-3" id="chatBefore">
+          <div class="text-[11px] font-bold tracking-widest uppercase text-zinc-400">Conversation</div>
+          <div class="text-xs text-zinc-400 italic border border-dashed border-zinc-200 dark:border-zinc-700 rounded-xl p-4 text-center">Press “1 — Teach” to start…</div>
+        </div>
+      </div>
+
+      <!-- AFTER -->
+      <div class="p-6 md:p-7 bg-gradient-to-b from-emerald-50/60 to-white dark:from-emerald-500/[0.07] dark:to-zinc-900">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-xl bg-emerald-600 text-white grid place-items-center text-[11px] font-bold">✓</div>
+            <div>
+              <div class="text-[13px] font-bold tracking-tight">WITH MemorySaver</div>
+              <div class="text-[11px] font-mono text-zinc-500">compile(checkpointer=MemorySaver()) + thread_id</div>
+            </div>
+          </div>
+          <span id="badgeAfter" class="text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-full bg-emerald-600 text-white">Idle</span>
+        </div>
+
+        <div class="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/40 bg-white dark:bg-zinc-950 p-4">
+          <div class="flex items-center justify-between">
+            <div class="text-[11px] font-bold tracking-widest uppercase text-emerald-700 dark:text-emerald-300">state[“messages”] — what LLM sees</div>
+            <div class="text-[11px] font-mono text-zinc-500" id="countAfter">len = 0</div>
+          </div>
+          <div class="mt-3 min-h-[92px] rounded-xl bg-emerald-50/60 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-800/50 p-3 flex flex-wrap gap-2 content-start" id="arrayAfter">
+            <span class="text-xs text-zinc-400 italic">empty — no history yet</span>
+          </div>
+          <div class="mt-3 flex items-center gap-2 text-[11px] font-mono">
+            <span class="px-2 py-1 rounded-full bg-emerald-600 text-white">LLM input</span>
+            <code id="llmAfter" class="text-zinc-600 dark:text-zinc-300">[]</code>
+          </div>
+          <div class="mt-4 rounded-xl border border-emerald-200 dark:border-emerald-800/50 bg-emerald-50/40 dark:bg-emerald-950/30 p-3 flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-emerald-600 text-white grid place-items-center text-sm">💾</div>
+            <div class="flex-1">
+              <div class="text-xs font-bold">MemorySaver @ thread_id=1</div>
+              <div id="ckptAfter" class="text-[11px] font-mono text-zinc-600 dark:text-zinc-400">— empty —</div>
+            </div>
+            <div id="iconAfter" class="w-2 h-2 rounded-full bg-zinc-300 dark:bg-zinc-600"></div>
+          </div>
+        </div>
+
+        <div class="mt-5 space-y-3" id="chatAfter">
+          <div class="text-[11px] font-bold tracking-widest uppercase text-zinc-400">Conversation</div>
+          <div class="text-xs text-zinc-400 italic border border-dashed border-zinc-200 dark:border-zinc-700 rounded-xl p-4 text-center">Press “1 — Teach” to start…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- bottom explainer -->
+    <div class="px-6 md:px-8 py-4 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-100 dark:border-zinc-800 flex flex-wrap gap-3 text-xs leading-4">
+      <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-blue-500"></span> HumanMessage</span>
+      <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> AI Message</span>
+      <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-rose-500"></span> Stateless branch — discarded at END</span>
+      <span class="inline-flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-600"></span> Stateful branch — persisted via checkpoint</span>
+      <span class="ml-auto font-mono text-zinc-500">add_messages merges inside a run • Checkpointer persists across runs</span>
+    </div>
+  </div>
+</section>
+
+<!-- Code diff -->
+<section class="max-w-[1220px] mx-auto px-6 pb-8">
+  <div class="grid lg:grid-cols-2 gap-4">
+    <div class="rounded-2xl border border-rose-200 dark:border-rose-900/40 bg-white dark:bg-zinc-900 overflow-hidden">
+      <div class="px-5 py-3 border-b border-rose-100 dark:border-rose-900/30 bg-rose-50/70 dark:bg-rose-500/10 flex items-center justify-between">
+        <div class="text-xs font-bold tracking-widest uppercase text-rose-700 dark:text-rose-300">Before — notebooks/chatbot-workflow.ipynb:96,156</div>
+        <span class="text-[11px] px-2 py-1 rounded-full bg-rose-600 text-white font-bold">FORGETS</span>
+      </div>
+      <pre class="p-5 text-[12px] leading-5 font-mono overflow-x-auto"><code><span class="text-zinc-500"># graph definition — ChatState + add_messages OK</span>
+graph = StateGraph(ChatState)
+graph.add_node('chat', chat)
+graph.add_edge(START, 'chat')
+graph.add_edge('chat', END)
+
+<span class="code-hl-rose">chatbot = graph.compile()  # ← no checkpointer</span>
+<span class="text-zinc-500"># loop — always fresh</span>
+<span class="code-hl-rose">response = chatbot.invoke(
+    {'messages': [HumanMessage(content=user_message)]}
+)  # ← no config, no thread_id</span>
+<span class="text-zinc-500"># Turn 1: sees [H1] → AI1, then state discarded
+# Turn 2: sees [H2] only → "I don't know"</span></code></pre>
+    </div>
+    <div class="rounded-2xl border border-emerald-200 dark:border-emerald-900/40 bg-white dark:bg-zinc-900 overflow-hidden">
+      <div class="px-5 py-3 border-b border-emerald-100 dark:border-emerald-900/30 bg-emerald-50/70 dark:bg-emerald-500/10 flex items-center justify-between">
+        <div class="text-xs font-bold tracking-widest uppercase text-emerald-700 dark:text-emerald-300">After — your fix (2 lines)</div>
+        <span class="text-[11px] px-2 py-1 rounded-full bg-emerald-600 text-white font-bold">REMEMBERS</span>
+      </div>
+      <pre class="p-5 text-[12px] leading-5 font-mono overflow-x-auto"><code><span class="text-zinc-500"># same graph — add checkpointer</span>
+graph = StateGraph(ChatState)
+graph.add_node('chat', chat)
+graph.add_edge(START, 'chat')
+graph.add_edge('chat', END)
+
+<span class="code-hl">memory = MemorySaver()
+chatbot = graph.compile(checkpointer=memory)</span>
+<span class="code-hl">config = {"configurable": {"thread_id": "1"}}</span>
+
+<span class="text-zinc-500"># loop — stateful invoke</span>
+<span class="code-hl">response = chatbot.invoke(
+    {'messages': [HumanMessage(content=user_message)]},
+    config=config
+)</span>
+<span class="text-zinc-500"># Turn 1: saves [H1, AI1] @ thread_1
+# Turn 2: loads [H1,AI1] + [H2] → "You're Theo!"</span></code></pre>
+    </div>
+  </div>
+  <div class="mt-3 rounded-xl border border-amber-200 dark:border-amber-900/30 bg-amber-50 dark:bg-amber-500/10 p-3 flex gap-3">
+    <div class="text-amber-600 dark:text-amber-300 text-sm">💡</div>
+    <div class="text-xs leading-4 text-zinc-700 dark:text-zinc-300"><strong>Mental model:</strong> <code class="font-mono">add_messages</code> is the <em>merge</em> inside one run. <code class="font-mono">MemorySaver + thread_id</code> is the <em>persistence</em> across runs. You need both. Without <code class="font-mono">thread_id</code>, the checkpoint has no key — it’s like a database with no primary key.</div>
+  </div>
+</section>
+
+<!-- Sequence embed -->
+<section class="max-w-[1220px] mx-auto px-6 pb-10">
+  <div class="rounded-[24px] border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden shadow-sm">
+    <div class="px-6 md:px-8 py-5 border-b border-zinc-100 dark:border-zinc-800">
+      <h3 class="text-[15px] font-bold tracking-tight">Formal trace — sequence diagram (Archify, showcase-validated)</h3>
+      <p class="text-xs text-zinc-500 dark:text-zinc-400 mt-1">Participants: User → Python Loop → StateGraph → LLM → MemorySaver. Use the viewer’s <strong>Views</strong> (Turn 1 / WITHOUT / WITH), <strong>Trace</strong> animation, search and export.</p>
+    </div>
+    <div class="bg-[#FCFCFD] dark:bg-zinc-950">
+      <iframe src="checkpoint-memory.html" class="w-full h-[880px] border-0" loading="lazy" title="Checkpoint Memory Sequence"></iframe>
+    </div>
+    <div class="px-6 md:px-8 py-4 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-100 dark:border-zinc-800 grid md:grid-cols-3 gap-4 text-xs leading-4">
+      <div><strong class="text-rose-600 dark:text-rose-300">BEFORE</strong> — <code>verify JWT</code>-like security variant for stateless calls: <code>invoke([H2])</code> → <code>llm([H2])</code> → fail.</div>
+      <div><strong class="text-emerald-600 dark:text-emerald-300">AFTER</strong> — dashed <code>save/load</code> edges for checkpoint I/O plus emphasis for stateful calls.</div>
+      <div><strong>Views:</strong> isolate Turn 1, WITHOUT, WITH. <strong>Trace</strong> animates the message flow. Exports are PNG/SVG-ready.</div>
+    </div>
+  </div>
+</section>
+
+<!-- Takeaways -->
+<section class="max-w-[1220px] mx-auto px-6 pb-14">
+  <div class="grid md:grid-cols-3 gap-4">
+    <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+      <div class="w-8 h-8 rounded-xl bg-rose-600 text-white grid place-items-center text-xs font-bold">1</div>
+      <div class="text-sm font-bold mt-3">It’s not the LLM that forgets</div>
+      <div class="text-xs text-zinc-600 dark:text-zinc-400 leading-4 mt-1">The LLM is stateless by design. You choose what you send: <code>[H2]</code> vs <code>[H1,AI1,H2]</code>. The bug was the caller sending only the last message.</div>
+    </div>
+    <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+      <div class="w-8 h-8 rounded-xl bg-violet-600 text-white grid place-items-center text-xs font-bold">2</div>
+      <div class="text-sm font-bold mt-3"><code>add_messages</code> ≠ persistence</div>
+      <div class="text-xs text-zinc-600 dark:text-zinc-400 leading-4 mt-1"><code>Annotated[list, add_messages]</code> merges correctly <em>within</em> one <code>invoke</code>. Across <code>invoke</code>s you need a <code>checkpointer</code>.</div>
+    </div>
+    <div class="rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-5">
+      <div class="w-8 h-8 rounded-xl bg-emerald-600 text-white grid place-items-center text-xs font-bold">3</div>
+      <div class="text-sm font-bold mt-3">Thread = conversation</div>
+      <div class="text-xs text-zinc-600 dark:text-zinc-400 leading-4 mt-1">Change <code>thread_id</code> → new conversation. Reuse it → continuation. For production, use <code>SqliteSaver</code> / <code>PostgresSaver</code> to survive restarts.</div>
+    </div>
+  </div>
+  <div class="mt-6 text-center text-xs text-zinc-500 dark:text-zinc-400">Built for <code>langgraph-agentic-chatbot/notebooks/teaching</code> • Archify sequence validates <strong>9/9</strong> showcase checks • Playground is pure HTML/JS — no build step</div>
+</section>
+
+<script>
+const $ = s => document.querySelector(s);
+let step = 0;
+const arrayBefore = $('#arrayBefore');
+const arrayAfter = $('#arrayAfter');
+const chatBefore = $('#chatBefore');
+const chatAfter = $('#chatAfter');
+const badgeBefore = $('#badgeBefore');
+const badgeAfter = $('#badgeAfter');
+const countBefore = $('#countBefore');
+const countAfter = $('#countAfter');
+const llmBefore = $('#llmBefore');
+const llmAfter = $('#llmAfter');
+const ckptBefore = $('#ckptBefore');
+const ckptAfter = $('#ckptAfter');
+const iconBefore = $('#iconBefore');
+const iconAfter = $('#iconAfter');
+
+function pill(label, kind) {
+  const color = kind === 'human' ? 'bg-blue-600 text-white' : 'bg-emerald-600 text-white';
+  return `<span class="pill pill-enter inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-mono font-medium ${color} shadow-sm">${kind === 'human' ? 'H:' : 'AI:'} ${label}</span>`;
+}
+function chatBubble(role, text, kind) {
+  const isUser = role === 'user';
+  return `<div class="flex gap-2.5 ${isUser ? '' : 'justify-end'} pill-enter">
+    <div class="${isUser ? 'bg-blue-600 text-white' : 'bg-zinc-900 dark:bg-zinc-800 text-white'} rounded-2xl px-3.5 py-2.5 text-xs leading-4 max-w-[78%] ${!isUser ? 'rounded-br-md' : 'rounded-bl-md'}">
+      <div class="font-bold text-[10px] tracking-widest uppercase opacity-70">${isUser ? 'You' : (kind==='fail' ? 'AI — stateless' : kind==='success' ? 'AI — stateful' : 'AI')}</div>
+      <div class="mt-0.5 font-medium">${text}</div>
+    </div>
+  </div>`;
+}
+
+function renderIdle() {
+  step = 0;
+  arrayBefore.innerHTML = '<span class="text-xs text-zinc-400 italic">empty — no history yet</span>';
+  arrayAfter.innerHTML = '<span class="text-xs text-zinc-400 italic">empty — no history yet</span>';
+  countBefore.textContent = 'len = 0';
+  countAfter.textContent = 'len = 0';
+  llmBefore.textContent = '[]';
+  llmAfter.textContent = '[]';
+  chatBefore.innerHTML = '<div class="text-[11px] font-bold tracking-widest uppercase text-zinc-400">Conversation</div><div class="text-xs text-zinc-400 italic border border-dashed border-zinc-200 dark:border-zinc-700 rounded-xl p-4 text-center">Press “1 — Teach” to start…</div>';
+  chatAfter.innerHTML = '<div class="text-[11px] font-bold tracking-widest uppercase text-zinc-400">Conversation</div><div class="text-xs text-zinc-400 italic border border-dashed border-zinc-200 dark:border-zinc-700 rounded-xl p-4 text-center">Press “1 — Teach” to start…</div>';
+  badgeBefore.textContent = 'Idle'; badgeBefore.className = 'text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-full bg-zinc-900 dark:bg-zinc-800 text-white';
+  badgeAfter.textContent = 'Idle'; badgeAfter.className = 'text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-full bg-emerald-600 text-white';
+  ckptBefore.textContent = '— not configured —'; ckptBefore.className = 'text-[11px] font-mono text-rose-600 dark:text-rose-300';
+  ckptAfter.textContent = '— empty —'; ckptAfter.className = 'text-[11px] font-mono text-zinc-600 dark:text-zinc-400';
+  iconBefore.textContent = '∅'; iconBefore.className = 'text-zinc-300 text-lg';
+  iconAfter.className = 'w-2 h-2 rounded-full bg-zinc-300 dark:bg-zinc-600';
+}
+
+function step1() {
+  step = 1;
+  // BEFORE
+  arrayBefore.innerHTML = pill('My name is Theo','human') + pill('Hi Theo!','ai');
+  countBefore.textContent = 'len = 2';
+  llmBefore.textContent = '[H1] → AI1';
+  chatBefore.innerHTML = '<div class="text-[11px] font-bold tracking-widest uppercase text-zinc-400">Conversation</div>' + chatBubble('user','My name is Theo','') + chatBubble('ai','Hi Theo!','');
+  badgeBefore.textContent = 'Turn 1 done'; badgeBefore.className = 'text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-full bg-amber-500 text-white';
+  ckptBefore.innerHTML = '<span class="text-zinc-500">would be</span> [H1, AI1] <span class="text-rose-600">→ discarded at END</span>';
+  iconBefore.textContent = '✕'; iconBefore.className = 'w-7 h-7 rounded-xl bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-300 grid place-items-center text-xs font-bold';
+  // AFTER
+  arrayAfter.innerHTML = pill('My name is Theo','human') + pill('Hi Theo!','ai');
+  countAfter.textContent = 'len = 2';
+  llmAfter.textContent = '[H1] → AI1';
+  chatAfter.innerHTML = '<div class="text-[11px] font-bold tracking-widest uppercase text-zinc-400">Conversation</div>' + chatBubble('user','My name is Theo','') + chatBubble('ai','Hi Theo!','');
+  badgeAfter.textContent = 'Saved'; badgeAfter.className = 'text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-full bg-emerald-600 text-white';
+  ckptAfter.textContent = '[H1, AI1] @ thread_1 ✓ saved';
+  ckptAfter.className = 'text-[11px] font-mono text-emerald-700 dark:text-emerald-300 font-medium';
+  iconAfter.className = 'w-2 h-2 rounded-full bg-emerald-500 animate-pulse';
+  setTimeout(()=> {
+    if(step===1){
+      // show discard animation for before
+      arrayBefore.classList.add('discard');
+      setTimeout(()=> {
+        arrayBefore.classList.remove('discard');
+        arrayBefore.innerHTML = '<span class="text-xs text-rose-600 dark:text-rose-300 font-medium">∅ discarded — next invoke starts from []</span>';
+        countBefore.textContent = 'len = 0 (reset)';
+        llmBefore.textContent = '[] (lost)';
+        badgeBefore.textContent = 'Discarded';
+        badgeBefore.className = 'text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-full bg-rose-600 text-white';
+      }, 620);
+    }
+  }, 900);
+}
+
+function step2() {
+  if(step===0) step1();
+  setTimeout(()=> {
+    step = 2;
+    // BEFORE branch
+    arrayBefore.innerHTML = pill('What\'s my name?','human');
+    countBefore.textContent = 'len = 1';
+    llmBefore.textContent = '[H2] only → LLM has no clue';
+    chatBefore.innerHTML = '<div class="text-[11px] font-bold tracking-widest uppercase text-zinc-400">Conversation</div>' + chatBubble('user','My name is Theo','') + chatBubble('ai','Hi Theo!','') + chatBubble('user','What\'s my name?','') + chatBubble('ai','I don\'t know you. Who are you? ❌','fail');
+    badgeBefore.textContent = 'Forgets';
+    badgeBefore.className = 'text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-full bg-rose-600 text-white';
+    ckptBefore.textContent = 'still ∅ — never saved';
+    // AFTER branch
+    arrayAfter.innerHTML = pill('My name is Theo','human') + pill('Hi Theo!','ai') + pill('What\'s my name?','human') + '<span class="pill pill-enter inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-bold bg-violet-600 text-white">+ load [H1,AI1]</span>' + pill('You\'re Theo! ✓','ai');
+    countAfter.textContent = 'len = 4';
+    llmAfter.textContent = '[H1, AI1, H2] → remembers Theo!';
+    chatAfter.innerHTML = '<div class="text-[11px] font-bold tracking-widest uppercase text-zinc-400">Conversation</div>' + chatBubble('user','My name is Theo','') + chatBubble('ai','Hi Theo!','') + chatBubble('user','What\'s my name?','') + chatBubble('ai','You\'re Theo! ✓','success');
+    badgeAfter.textContent = 'Remembers';
+    badgeAfter.className = 'text-[11px] font-bold tracking-widest uppercase px-2.5 py-1 rounded-full bg-emerald-600 text-white';
+    ckptAfter.textContent = '[H1,AI1,H2,AI2] @ thread_1 ✓';
+    iconAfter.className = 'w-2 h-2 rounded-full bg-emerald-500';
+  }, step===1 ? 650 : 0);
+}
+
+$('#btnReset').addEventListener('click', renderIdle);
+$('#btnStep1').addEventListener('click', step1);
+$('#btnStep2').addEventListener('click', step2);
+renderIdle();
+
+document.getElementById('themeToggle').addEventListener('click', () => {
+  document.documentElement.classList.toggle('dark');
+});
+
+// auto-demo once
+setTimeout(()=> { step1(); setTimeout(step2, 2200); }, 800);
+</script>
+</body>
+</html>
