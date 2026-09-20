@@ -2,8 +2,10 @@ from langchain_tavily import TavilySearch
 from langchain_core.tools import tool
 import requests
 import math
+import json
 from typing import Any
 from dotenv import load_dotenv
+from chunking import create_retriever
 import os
 load_dotenv()
 
@@ -169,3 +171,58 @@ def get_current_weather(location: str) -> str:
     except (KeyError, TypeError, ValueError) as error:
         return f"Unexpected weather API response: {error}"
 
+
+@tool
+def rag_tool(query: str) -> str:
+    """
+    Retrieve relevant information from the PDF document.
+
+    Use this tool when the user asks factual or conceptual questions
+    that may be answered using the stored PDF documents.
+
+    The default tool is useful when no PDF has been uploaded. A chatbot created
+    with ``make_rag_tool`` uses the uploaded PDF's already-built retriever.
+    """
+
+    return "No PDF is loaded. Ask the user to upload a PDF before using document search."
+
+
+def make_rag_tool(retriever, document_name="uploaded PDF"):
+    """Create a document-search tool bound to one session's retriever."""
+    @tool
+    def search_uploaded_pdf(query: str) -> str:
+        """Search the uploaded PDF for information relevant to the query."""
+        documents = retriever.invoke(query)
+
+        if not documents:
+            return json.dumps({
+                "type": "rag_retrieval",
+                "query": query,
+                "document_name": document_name,
+                "retrieved_documents": [],
+                "message": "No relevant information was found in the uploaded PDF.",
+            })
+
+        retrieved_documents = []
+        for index, document in enumerate(documents, start=1):
+            page = document.metadata.get("page")
+            retrieved_documents.append({
+                "rank": index,
+                "page": page + 1 if isinstance(page, int) else page or "Unknown",
+                "chunk_characters": len(document.page_content),
+                "content": document.page_content,
+            })
+
+        return json.dumps({
+            "type": "rag_retrieval",
+            "query": query,
+            "document_name": document_name,
+            "retrieval": {
+                "strategy": "similarity",
+                "requested_k": 4,
+                "returned_k": len(retrieved_documents),
+            },
+            "retrieved_documents": retrieved_documents,
+        })
+
+    return search_uploaded_pdf
